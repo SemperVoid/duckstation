@@ -566,6 +566,8 @@ static void WriteNewmtlForPoly(FILE* fp, const Poly& poly, const std::string& mt
   else
   {
     fmt::print(fp, "Kd 1 1 1\n");
+    if (poly.transparency_enable)
+      fmt::print(fp, "d 0.5\n");
   }
   fmt::print(fp, "\n");
 }
