@@ -230,7 +230,7 @@ static u32 PackSXYIntoU32(s32 Sx, s32 Sy)
 Vertex& FindFreeScreenCoord(s32& Sx, s32& Sy)
 {
   const u32 key = PackSXYIntoU32(Sx, Sy);
-  auto [it, success] = s_vertex_cache.try_emplace(key);
+  const auto [it, success] = s_vertex_cache.try_emplace(key);
   if (success)
     return it->second;
 
@@ -256,7 +256,7 @@ Vertex& FindFreeScreenCoord(s32& Sx, s32& Sy)
     Sy = Sy < -1024 ? -1024 : Sy > 1023 ? 1023 : Sy;
 
     const u32 key = PackSXYIntoU32(Sx, Sy);
-    auto [it, success] = s_vertex_cache.try_emplace(key);
+    const auto [it, success] = s_vertex_cache.try_emplace(key);
     if (success)
       return it->second;
   }
@@ -316,9 +316,6 @@ void DrawPolygon(
   u16 palette_reg,
   GPUTextureWindow texture_window
 ) {
-  if (!s_running)
-    return;
-
   Poly poly;
 
   poly.is_quad = rc.quad_polygon;
@@ -394,7 +391,6 @@ static void FillTextureFromVRAM(Texture& texture, const u16* vram_ptr)
           (draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT
         );
         const u16 palette_index = (palette_value >> ((texcoord_x % 4) * 4)) & 0x0Fu;
-
         texture_color = GetPixel(
           (palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH,
           palette.GetYBase()
@@ -402,15 +398,15 @@ static void FillTextureFromVRAM(Texture& texture, const u16* vram_ptr)
       }
       else if (texture_mode == GPUTextureMode::Palette8Bit)
       {
-          const u16 palette_value = GetPixel(
-            (draw_mode.GetTexturePageBaseX() + ZeroExtend32(texcoord_x / 2)) % VRAM_WIDTH,
-            (draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT
-          );
-          const u16 palette_index = (palette_value >> ((texcoord_x % 2) * 8)) & 0xFFu;
-          texture_color = GetPixel(
-            (palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH,
-            palette.GetYBase()
-          );
+        const u16 palette_value = GetPixel(
+          (draw_mode.GetTexturePageBaseX() + ZeroExtend32(texcoord_x / 2)) % VRAM_WIDTH,
+          (draw_mode.GetTexturePageBaseY() + ZeroExtend32(texcoord_y)) % VRAM_HEIGHT
+        );
+        const u16 palette_index = (palette_value >> ((texcoord_x % 2) * 8)) & 0xFFu;
+        texture_color = GetPixel(
+          (palette.GetXBase() + ZeroExtend32(palette_index)) % VRAM_WIDTH,
+          palette.GetYBase()
+        );
       }
       else {
         texture_color = GetPixel(
@@ -517,7 +513,7 @@ static void DumpTextures(const std::string& dump_directory)
 // Write OBJ/MTL
 ////////////////////////////////////
 template <class T>
-static bool VectorContains(const std::vector<T> vec, const T& x)
+static bool VectorContains(const std::vector<T>& vec, const T& x)
 {
   for (const auto& elem : vec)
     if (elem == x)
@@ -622,7 +618,7 @@ static void Lookup3DVertsForPoly(const Vertex* v3d[4], const Poly& poly)
     const s32 sy = poly.v[i].y;
 
     const u32 key = PackSXYIntoU32(sx, sy);
-    auto find_result = s_vertex_cache.find(key);
+    const auto find_result = s_vertex_cache.find(key);
 
     if (find_result == s_vertex_cache.end())
     {
@@ -642,8 +638,8 @@ static void WriteOBJ(
   const std::string obj_path = Path::Combine(dump_directory, fmt::format("{}.obj", filename));
   const std::string mtl_path = Path::Combine(dump_directory, fmt::format("{}.mtl", filename));
 
-  auto obj_file = FileSystem::OpenManagedCFile(obj_path.c_str(), "wb");
-  auto mtl_file = FileSystem::OpenManagedCFile(mtl_path.c_str(), "wb");
+  const auto obj_file = FileSystem::OpenManagedCFile(obj_path.c_str(), "wb");
+  const auto mtl_file = FileSystem::OpenManagedCFile(mtl_path.c_str(), "wb");
   if (!obj_file || !mtl_file)
   {
     Host::AddFormattedOSDMessage(10.0f, "Couldn't open OBJ file in '%s'", dump_directory.c_str());
@@ -845,10 +841,10 @@ static void FinishFrame()
     return;
 
   fmt::print(
-   "Got {} vertices, {} polys, {} textures.\n",
-   s_vertex_cache.size(),
-   s_poly_buffer.size(),
-   s_textures.size()
+    "Got {} vertices, {} polys, {} textures.\n",
+    s_vertex_cache.size(),
+    s_poly_buffer.size(),
+    s_textures.size()
   );
 
   if (!s_config.is_dry_run)
