@@ -418,6 +418,56 @@ bool GPU::HandleRenderRectangleCommand()
   m_render_command.bits = rc.bits;
   m_fifo.RemoveOne();
 
+  // Pass rect to Screenshot3D
+  if (Screenshot3D::WantsRectangle())
+  {
+    int k = 0;
+    GPUBackendDrawPolygonCommand::Vertex v;
+
+    v.color = rc.color_for_first_vertex;
+
+    const GPUVertexPosition vp{FifoPeek(k++)};
+    v.x = TruncateGPUVertexPosition(vp.x);
+    v.y = TruncateGPUVertexPosition(vp.y);
+
+    v.texcoord = rc.texture_enable ? Truncate16(FifoPeek(k++)) : 0;
+
+    u16 width, height;
+    switch (rc.rectangle_size)
+    {
+      case GPUDrawRectangleSize::R1x1:
+        width = 1;
+        height = 1;
+        break;
+      case GPUDrawRectangleSize::R8x8:
+        width = 8;
+        height = 8;
+        break;
+      case GPUDrawRectangleSize::R16x16:
+        width = 16;
+        height = 16;
+        break;
+      default:
+      {
+        const u32 width_and_height = FifoPeek(k++);
+        width = static_cast<u16>(width_and_height & VRAM_WIDTH_MASK);
+        height = static_cast<u16>((width_and_height >> 16) & VRAM_HEIGHT_MASK);
+      }
+      break;
+    }
+
+    if (width < MAX_PRIMITIVE_WIDTH && height < MAX_PRIMITIVE_HEIGHT)
+    {
+      Screenshot3D::DrawRectangle(
+        rc, v,
+        width, height,
+        m_draw_mode.mode_reg,
+        m_draw_mode.palette_reg,
+        m_draw_mode.texture_window
+      );
+    }
+  }
+
   DispatchRenderCommand();
   EndCommand();
   return true;

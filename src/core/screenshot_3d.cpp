@@ -47,6 +47,7 @@ struct Poly
   GPUBackendDrawPolygonCommand::Vertex v[4];
 
   u8 is_quad : 1;
+  u8 is_rect : 1;
   u8 texture_enable : 1;
   u8 transparency_enable : 1;
 
@@ -288,8 +289,22 @@ bool WantsPolygon()
   return s_running;
 }
 
-static TextureIndex AssignPolyToTexture(TextureState tstate, const Poly& poly)
+static TextureIndex AssignPolyToTexture(
+  const Poly& poly,
+  GPUDrawModeReg mode_reg,
+  u16 palette_reg,
+  GPUTextureWindow texture_window
+)
 {
+  TextureState tstate;
+
+  tstate.texture_page_x_base = mode_reg.texture_page_x_base;
+  tstate.texture_page_y_base = mode_reg.texture_page_y_base;
+  tstate.texture_mode = u16(mode_reg.texture_mode.GetValue());
+  tstate.transparency_enable = poly.transparency_enable;
+  tstate.palette = palette_reg;
+  tstate.window = texture_window;
+
   const u64 key = tstate.PackIntoU64();
   const u32 next_texture_index = s_textures.size();
   const auto [it, inserted] = s_texture_cache.insert({key, next_texture_index});
@@ -319,6 +334,7 @@ void DrawPolygon(
   Poly poly;
 
   poly.is_quad = rc.quad_polygon;
+  poly.is_rect = false;
   poly.texture_enable = rc.texture_enable;
   poly.transparency_enable = rc.transparency_enable;
   poly.transparency_mode = mode_reg.transparency_mode;
@@ -337,18 +353,83 @@ void DrawPolygon(
   }
 
   if (poly.texture_enable)
+    poly.texture_index = AssignPolyToTexture(poly, mode_reg, palette_reg, texture_window);
+
+  s_poly_buffer.push_back(poly);
+}
+
+bool WantsRectangle()
+{
+  return s_running && s_config.in_2d_mode;
+}
+
+void DrawRectangle(
+  GPURenderCommand rc,
+  GPUBackendDrawPolygonCommand::Vertex vert,
+  u16 width,
+  u16 height,
+  GPUDrawModeReg mode_reg,
+  u16 palette_reg,
+  GPUTextureWindow texture_window
+)
+{
+  Poly poly;
+
+  // Raw texturing is the same as shading with 128
+  if (rc.texture_enable && rc.raw_texture_enable)
   {
-    TextureState tstate;
-
-    tstate.texture_page_x_base = mode_reg.texture_page_x_base;
-    tstate.texture_page_y_base = mode_reg.texture_page_y_base;
-    tstate.texture_mode = (u16)mode_reg.texture_mode.GetValue();
-    tstate.transparency_enable = poly.transparency_enable;
-    tstate.palette = palette_reg;
-    tstate.window = texture_window;
-
-    poly.texture_index = AssignPolyToTexture(tstate, poly);
+    vert.r = 128;
+    vert.g = 128;
+    vert.b = 128;
   }
+
+  poly.v[0] = poly.v[1] = poly.v[2] = poly.v[3] = vert;
+
+  // BUG: We currently cannot handle over-large rects that cross the
+  // edge of the 256x256 UV space (they would wrap around). Cut the
+  // rect down so it fits.
+  if (rc.texture_enable)
+  {
+    if (u32(vert.u) + width - 1 > 255)
+      width = 256 - vert.u;
+    if (u32(vert.v) + height - 1 > 255)
+      height = 256 - vert.v;
+  }
+
+  // Quad order is top-left, bottom-left, top-right, bottom-right.
+  //
+  //   0--2
+  //   |  |
+  //   1--3
+  //
+  // Note that there is a texture_x_flip/texture_y_flip which
+  // theoretically reverses the direction XY/UV advances, but
+  // DuckStation appears to ignore it, so we do too.
+
+  poly.v[1].y += height;
+  poly.v[2].x += width;
+  poly.v[3].x += width;
+  poly.v[3].y += height;
+
+  if (rc.texture_enable)
+  {
+    // -1 is because we treat poly UVs as inclusive of their endpoint.
+    // When we write vt's we will correct these so they cover the
+    // exact correct rectangle in UV space.
+    poly.v[1].v += height - 1;
+    poly.v[2].u += width - 1;
+    poly.v[3].u += width - 1;
+    poly.v[3].v += height - 1;
+  }
+
+  poly.is_quad = true;
+  poly.is_rect = true;
+  poly.texture_enable = rc.texture_enable;
+  poly.transparency_enable = rc.transparency_enable;
+  poly.transparency_mode = mode_reg.transparency_mode;
+
+  if (poly.texture_enable)
+    poly.texture_index = AssignPolyToTexture(poly, mode_reg, palette_reg, texture_window);
 
   s_poly_buffer.push_back(poly);
 }
@@ -713,8 +794,30 @@ static void WriteOBJ(
       if (poly.texture_enable)
       {
         const UVBlob& blob = s_textures[poly.texture_index].blob;
-        const float u = ConvertTexcoord(poly.v[i].u - blob.min_u, blob.Width());
-        const float v = ConvertTexcoord(poly.v[i].v - blob.min_v, blob.Height());
+        float u = ConvertTexcoord(poly.v[i].u - blob.min_u, blob.Width());
+        float v = ConvertTexcoord(poly.v[i].v - blob.min_v, blob.Height());
+
+        if (poly.is_rect)
+        {
+          // For 2D rectangles only, we snap the texcoords from the
+          // texel center to the corners (marked X) so that the whole
+          // rectangle covers exactly the correct integer number of
+          // texels.
+          //
+          //    X-----+-----X
+          //    |\    |    /|
+          //    |  0 -|- 2  |
+          //    |  '  |  '  |
+          //    +--'--+--'--+
+          //    |  '  |  '  |
+          //    |  1 -|- 3  |
+          //    |/    |    \|
+          //    X-----+-----X
+          const float texel_half_width = 0.5f / blob.Width();
+          const float texel_half_height = 0.5f / blob.Height();
+          u += ((i == 0 || i == 1) ? -1.f : 1.f) * texel_half_width;
+          v += ((i == 0 || i == 2) ? -1.f : 1.f) * texel_half_height;
+        }
 
         fmt::print(obj_fp, "vt {:.4f} {:.4f}\n", u, 1.f - v);
       }
@@ -966,16 +1069,14 @@ void DrawGuiWindow()
 
   ImGui::Checkbox("2D Mode", &s_ui_config.in_2d_mode);
   HelpIcon(
-    "Mostly for debug use.\n"
-    "\n"
-    "Dumps polys with raw 2D screen coords instead of the\n"
-    "reconstructed 3D verts. Drawing order is converted\n"
+    "Dumps 2D polys instead of the reconstructed 3D scene.\n"
+    "Gives an exploded view, where drawing order is converted\n"
     "to Z depth.\n"
     "\n"
-    "Expect UV issues on 2D elements, especially along the\n"
-    "bottom-right edges.\n"
+    "Good for pre-rendered backgrounds, 2D games... or for fun.\n"
     "\n"
-    "Vertices do not jitter in this mode."
+    "Expect UV issues on 2D elements drawn in 3D space,\n"
+    "especially along the bottom-right edges.\n"
   );
 
   ImGui::Checkbox("Dry Run", &s_ui_config.is_dry_run);

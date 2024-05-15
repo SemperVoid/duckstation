@@ -23,6 +23,18 @@ void DrawPolygon(
   GPUTextureWindow texture_window
 );
 
+// Called when a rectangle is drawn (2D mode only)
+bool WantsRectangle();
+void DrawRectangle(
+  GPURenderCommand rc,
+  GPUBackendDrawPolygonCommand::Vertex vert,
+  u16 width,
+  u16 height,
+  GPUDrawModeReg mode_reg,
+  u16 palette_reg,
+  GPUTextureWindow texture_window
+);
+
 // Called once just before NextFrame to fill texture data from the
 // contents of VRAM.
 //
