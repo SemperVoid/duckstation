@@ -1,6 +1,7 @@
 #pragma once
 #include "types.h"
 #include "gpu_types.h"
+#include <array>
 
 namespace Screenshot3D {
 
@@ -12,6 +13,7 @@ bool ShouldDisableCulling();
 
 // Called in GTE.RTPS to track 3D verts
 void PushVertex(s32& Sx, s32& Sy, float x, float y, float z);
+bool ShouldUsePGXP();
 
 // Called when a polygon is drawn
 bool WantsPolygon();
@@ -20,7 +22,8 @@ void DrawPolygon(
   const GPUBackendDrawPolygonCommand::Vertex verts[4],
   GPUDrawModeReg mode_reg,
   u16 palette_reg,
-  GPUTextureWindow texture_window
+  GPUTextureWindow texture_window,
+  const std::array<float, 3> pgxp_verts[4]
 );
 
 // Called when a rectangle is drawn (2D mode only)

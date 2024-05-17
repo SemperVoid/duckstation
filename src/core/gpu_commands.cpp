@@ -6,6 +6,7 @@
 #include "common/string_util.h"
 #include "gpu.h"
 #include "interrupt_controller.h"
+#include "pgxp.h"
 #include "screenshot_3d.h"
 #include "system.h"
 #include "texture_replacements.h"
@@ -368,21 +369,37 @@ bool GPU::HandleRenderPolygonCommand()
     const bool shaded = rc.shading_enable;
     const bool textured = rc.texture_enable;
 
+    std::array<float, 3> pgxp_v[4];
+    bool use_pgxp = Screenshot3D::ShouldUsePGXP();
+
     for (u32 i = 0; i < (rc.quad_polygon ? 4 : 3); i++)
     {
       v[i].color = (shaded && i > 0) ? (FifoPeek(k++) & UINT32_C(0x00FFFFFF)) : first_color;
-      const u64 maddr_and_pos = FifoPeek(k++);
+      const u64 maddr_and_pos = m_fifo.Peek(k++);
       const GPUVertexPosition vp{Truncate32(maddr_and_pos)};
       v[i].x = vp.x;
       v[i].y = vp.y;
       v[i].texcoord = textured ? Truncate16(FifoPeek(k++)) : 0;
+
+      // Get vertex data from PGXP
+      if (use_pgxp)
+      {
+        use_pgxp = PGXP::GetPreciseVertexFor3DScreenshot(
+          Truncate32(maddr_and_pos >> 32),
+          vp.bits,
+          m_drawing_offset.x + vp.x, m_drawing_offset.y + vp.y,
+          m_drawing_offset.x, m_drawing_offset.y,
+          &pgxp_v[i][0], &pgxp_v[i][1], &pgxp_v[i][2]
+        );
+      }
     }
 
     Screenshot3D::DrawPolygon(
       rc, v,
       m_draw_mode.mode_reg,
       m_draw_mode.palette_reg,
-      m_draw_mode.texture_window
+      m_draw_mode.texture_window,
+      use_pgxp ? pgxp_v : nullptr
     );
   }
 

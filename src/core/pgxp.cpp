@@ -549,6 +549,43 @@ bool PGXP::GetPreciseVertex(u32 addr, u32 value, int x, int y, int xOffs, int yO
   return false;
 }
 
+bool PGXP::GetPreciseVertexFor3DScreenshot(
+  u32 addr, u32 value, int x, int y, int xOffs, int yOffs,
+  float* out_x, float* out_y, float* out_z
+)
+{
+  const PGXP_value* vert = ReadMem(addr);
+  if (vert && ((vert->flags & VALID_01) == VALID_01) && (vert->value == value))
+  {
+    // There is a value here with valid X and Y coordinates
+    *out_x = vert->x;
+    *out_y = vert->y;
+    *out_z = vert->z;
+
+    return true;
+  }
+
+  if (g_settings.gpu_pgxp_vertex_cache)
+  {
+    const short psx_x = (short)(value & 0xFFFFu);
+    const short psx_y = (short)(value >> 16);
+
+    // Look in cache for valid vertex
+    vert = PGXP_GetCachedVertex(psx_x, psx_y);
+    if (vert && (vert->flags & VALID_01) == VALID_01)
+    {
+      *out_x = vert->x;
+      *out_y = vert->y;
+      *out_z = vert->z;
+
+      return true;
+    }
+  }
+
+  // no valid value can be found anywhere
+  return false;
+}
+
 // Instruction register decoding
 #define op(_instr) (_instr >> 26)          // The op part of the instruction register
 #define func(_instr) ((_instr)&0x3F)       // The funct part of the instruction register

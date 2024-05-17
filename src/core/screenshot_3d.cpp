@@ -32,6 +32,7 @@ struct Config
   bool disable_culling = true;
   bool dump_full_textures = true;
   bool in_2d_mode = false;
+  bool use_pgxp = false;
   bool is_dry_run = false;
 };
 
@@ -45,11 +46,13 @@ struct Vertex
 struct Poly
 {
   GPUBackendDrawPolygonCommand::Vertex v[4];
+  std::array<float, 3> v_3d[4];  // 3D vert positions
 
   u8 is_quad : 1;
   u8 is_rect : 1;
   u8 texture_enable : 1;
   u8 transparency_enable : 1;
+  u8 has_3d_verts : 1;
 
   GPUTransparencyMode transparency_mode;
 
@@ -217,6 +220,11 @@ bool ShouldDisableCulling()
   return s_running && s_config.disable_culling;
 }
 
+bool ShouldUsePGXP()
+{
+  return s_running && g_settings.gpu_pgxp_enable && s_config.use_pgxp && !s_config.in_2d_mode;
+}
+
 ////////////////////////////////////
 // Vertex/RTPS tracking
 ////////////////////////////////////
@@ -324,12 +332,34 @@ static TextureIndex AssignPolyToTexture(
   return next_texture_index;
 }
 
+static bool Lookup3DVertsForPoly(const Vertex* v3d[4], const Poly& poly)
+{
+  for (int i = 0; i < poly.NumVerts(); ++i)
+  {
+    // NOTE: here is where we would apply a correction if the RTPS
+    // output and the triangle coords are out of phase
+    const s32 sx = poly.v[i].x;
+    const s32 sy = poly.v[i].y;
+
+    const u32 key = PackSXYIntoU32(sx, sy);
+    const auto find_result = s_vertex_cache.find(key);
+
+    if (find_result == s_vertex_cache.end())
+      return false;
+
+    v3d[i] = &find_result->second;
+  }
+
+  return true;
+}
+
 void DrawPolygon(
   GPURenderCommand rc,
   const GPUBackendDrawPolygonCommand::Vertex verts[4],
   GPUDrawModeReg mode_reg,
   u16 palette_reg,
-  GPUTextureWindow texture_window
+  GPUTextureWindow texture_window,
+  const std::array<float, 3> pgxp_v[4]
 ) {
   Poly poly;
 
@@ -338,6 +368,7 @@ void DrawPolygon(
   poly.texture_enable = rc.texture_enable;
   poly.transparency_enable = rc.transparency_enable;
   poly.transparency_mode = mode_reg.transparency_mode;
+  poly.has_3d_verts = false;
 
   for (int i = 0; i < poly.NumVerts(); i++)
   {
@@ -354,6 +385,31 @@ void DrawPolygon(
 
   if (poly.texture_enable)
     poly.texture_index = AssignPolyToTexture(poly, mode_reg, palette_reg, texture_window);
+
+  // Try to get 3D vert positions
+  if (!s_config.in_2d_mode)
+  {
+    if (!ShouldUsePGXP())
+    {
+      const Vertex* v_3d[4];
+      if (Lookup3DVertsForPoly(v_3d, poly))
+      {
+        poly.has_3d_verts = true;
+        for (int i = 0; i < poly.NumVerts(); i++)
+        {
+          poly.v_3d[i][0] = v_3d[i]->x;
+          poly.v_3d[i][1] = v_3d[i]->y;
+          poly.v_3d[i][2] = v_3d[i]->z;
+        }
+      }
+    }
+    else if (pgxp_v)
+    {
+      poly.has_3d_verts = true;
+      for (int i = 0; i < poly.NumVerts(); i++)
+        poly.v_3d[i] = pgxp_v[i];
+    }
+  }
 
   s_poly_buffer.push_back(poly);
 }
@@ -427,6 +483,7 @@ void DrawRectangle(
   poly.texture_enable = rc.texture_enable;
   poly.transparency_enable = rc.transparency_enable;
   poly.transparency_mode = mode_reg.transparency_mode;
+  poly.has_3d_verts = false;
 
   if (poly.texture_enable)
     poly.texture_index = AssignPolyToTexture(poly, mode_reg, palette_reg, texture_window);
@@ -689,28 +746,6 @@ static float ConvertTexcoord(u32 texcoord, u32 width)
   return (float(texcoord) + 0.5f) / float(width);
 }
 
-static void Lookup3DVertsForPoly(const Vertex* v3d[4], const Poly& poly)
-{
-  for (int i = 0; i < poly.NumVerts(); ++i)
-  {
-    // NOTE: here is where we would apply a correction if the RTPS
-    // output and the triangle coords are out of phase
-    const s32 sx = poly.v[i].x;
-    const s32 sy = poly.v[i].y;
-
-    const u32 key = PackSXYIntoU32(sx, sy);
-    const auto find_result = s_vertex_cache.find(key);
-
-    if (find_result == s_vertex_cache.end())
-    {
-      v3d[0] = nullptr;
-      return;
-    }
-
-    v3d[i] = &find_result->second;
-  }
-}
-
 static void WriteOBJ(
   const std::string& dump_directory,
   const std::string& filename
@@ -745,11 +780,7 @@ static void WriteOBJ(
     // v - Vertex position & color
     if (!s_config.in_2d_mode)
     {
-      const Vertex* v3d[4];
-      Lookup3DVertsForPoly(v3d, poly);
-
-      // Skip if at least one corner didn't have a 3D vertex
-      if (!v3d[0])
+      if (!poly.has_3d_verts)
         continue;
 
       for (int i = 0; i < poly.NumVerts(); ++i)
@@ -757,9 +788,9 @@ static void WriteOBJ(
         fmt::print(
           obj_fp,
           "v {} {} {} {:.3f} {:.3f} {:.3f}\n",
-          v3d[i]->x,
-          -v3d[i]->y,
-          -v3d[i]->z,
+          poly.v_3d[i][0],
+          -poly.v_3d[i][1],
+          -poly.v_3d[i][2],
           poly.v[i].r / 255.f,
           poly.v[i].g / 255.f,
           poly.v[i].b / 255.f
@@ -999,7 +1030,7 @@ void DrawGuiWindow()
   const float framebuffer_scale = Host::GetOSDScale();
 
   ImGui::SetNextWindowSize(
-    ImVec2(400.0f * framebuffer_scale, 200.0f * framebuffer_scale),
+    ImVec2(400.0f * framebuffer_scale, 210.0f * framebuffer_scale),
     ImGuiCond_Once
   );
 
@@ -1078,6 +1109,29 @@ void DrawGuiWindow()
     "Expect UV issues on 2D elements drawn in 3D space,\n"
     "especially along the bottom-right edges.\n"
   );
+
+  if (!g_settings.gpu_pgxp_enable)
+    ImGui::BeginDisabled();
+
+  ImGui::Checkbox("Use PGXP", &s_ui_config.use_pgxp);
+  HelpIcon(
+    "Experimental option! Use PGXP to track vertex positions.\n"
+    "Try this if 3D screenshots don't work for your game, but\n"
+    "PGXP does.\n"
+    "\n"
+    "PGXP MUST be enabled for this to work. Turn it on under:\n"
+    "\n"
+    "> Settings > Enhancements > PGXP > Geometry Correction\n"
+    "\n"
+    "For best results also turn on CPU Mode:\n"
+    "\n"
+    "> Settings > Enhancements > PGXP > CPU Mode (Very Slow)"
+  );
+  ImGui::SameLine();
+  ImGui::Text("(currently %s)", g_settings.gpu_pgxp_enable ? "ON" : "OFF");
+
+  if (!g_settings.gpu_pgxp_enable)
+    ImGui::EndDisabled();
 
   ImGui::Checkbox("Dry Run", &s_ui_config.is_dry_run);
   HelpIcon(

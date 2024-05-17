@@ -25,6 +25,10 @@ void CPU_SWC2(u32 instr, u32 addr, u32 rtVal); // copy GTE reg to memory
 
 bool GetPreciseVertex(u32 addr, u32 value, int x, int y, int xOffs, int yOffs, float* out_x, float* out_y,
                       float* out_w);
+bool GetPreciseVertexFor3DScreenshot(
+  u32 addr, u32 value, int x, int y, int xOffs, int yOffs,
+  float* out_x, float* out_y, float* out_z
+);
 
 // -- CPU functions
 void CPU_LW(u32 instr, u32 addr, u32 rtVal);
