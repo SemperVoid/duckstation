@@ -12,7 +12,7 @@ void Shutdown();
 bool ShouldDisableCulling();
 
 // Called in GTE.RTPS to track 3D verts
-void PushVertex(s32& Sx, s32& Sy, float x, float y, float z);
+void PushVertex(float x, float y, float z, s32& Sx, s32& Sy);
 bool ShouldUsePGXP();
 
 // Called when a polygon is drawn

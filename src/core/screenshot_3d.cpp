@@ -236,7 +236,7 @@ static u32 PackSXYIntoU32(s32 Sx, s32 Sy)
 // Jitter the output of RTPS around so no two verts land on the same
 // pixel. Thus a screen pixel uniquely indentifies the vert that
 // produced it.
-Vertex& FindFreeScreenCoord(s32& Sx, s32& Sy)
+static Vertex& FindFreeScreenCoord(s32& Sx, s32& Sy)
 {
   const u32 key = PackSXYIntoU32(Sx, Sy);
   const auto [it, success] = s_vertex_cache.try_emplace(key);
@@ -271,7 +271,7 @@ Vertex& FindFreeScreenCoord(s32& Sx, s32& Sy)
   }
 }
 
-void PushVertex(s32& Sx, s32& Sy, float x, float y, float z)
+void PushVertex(float x, float y, float z, s32& Sx, s32& Sy)
 {
   if (!s_running || s_config.in_2d_mode)
     return;

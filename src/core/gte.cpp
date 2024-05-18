@@ -747,11 +747,15 @@ void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
   const float screenshot_x = float(x) / (static_cast<float>(1 << shift));
   const float screenshot_y = float(y) / (static_cast<float>(1 << shift));
   const float screenshot_z = float(z) / 4096.0f;
-  Screenshot3D::PushVertex(Sx32, Sy32, screenshot_x, screenshot_y, screenshot_z);
+  Screenshot3D::PushVertex(screenshot_x, screenshot_y, screenshot_z, Sx32, Sy32);
 
   PushSXY(Sx32, Sy32);
 
-  if (g_settings.gpu_pgxp_enable)
+  if (Screenshot3D::ShouldUsePGXP())
+  {
+    PGXP::GTE_PushSXYZ2f(screenshot_x, screenshot_y, screenshot_z, REGS.dr32[14]);
+  }
+  else if (g_settings.gpu_pgxp_enable)
   {
     float precise_sz3, precise_ir1, precise_ir2;
 
@@ -818,10 +822,7 @@ void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
     precise_x = std::clamp<float>(precise_x, -1024.0f, 1023.0f);
     precise_y = std::clamp<float>(precise_y, -1024.0f, 1023.0f);
 
-    if (!Screenshot3D::ShouldUsePGXP())
-      PGXP::GTE_PushSXYZ2f(precise_x, precise_y, precise_z, REGS.dr32[14]);
-    else
-      PGXP::GTE_PushSXYZ2f(screenshot_x, screenshot_y, screenshot_z, REGS.dr32[14]);
+    PGXP::GTE_PushSXYZ2f(precise_x, precise_y, precise_z, REGS.dr32[14]);
   }
 
   if (last)
