@@ -1030,7 +1030,7 @@ void DrawGuiWindow()
   const float framebuffer_scale = Host::GetOSDScale();
 
   ImGui::SetNextWindowSize(
-    ImVec2(400.0f * framebuffer_scale, 210.0f * framebuffer_scale),
+    ImVec2(400.0f * framebuffer_scale, 190.0f * framebuffer_scale),
     ImGuiCond_Once
   );
 
@@ -1098,22 +1098,13 @@ void DrawGuiWindow()
     "changing every frame."
   );
 
-  ImGui::Checkbox("2D Mode", &s_ui_config.in_2d_mode);
-  HelpIcon(
-    "Dumps 2D polys instead of the reconstructed 3D scene.\n"
-    "Gives an exploded view, where drawing order is converted\n"
-    "to Z depth.\n"
-    "\n"
-    "Good for pre-rendered backgrounds, 2D games... or for fun.\n"
-    "\n"
-    "Expect UV issues on 2D elements drawn in 3D space,\n"
-    "especially along the bottom-right edges.\n"
-  );
-
   if (!g_settings.gpu_pgxp_enable)
     ImGui::BeginDisabled();
-
   ImGui::Checkbox("Use PGXP", &s_ui_config.use_pgxp);
+  ImGui::SameLine();
+  ImGui::Text("(currently %s)", g_settings.gpu_pgxp_enable ? "ON" : "OFF");
+  if (!g_settings.gpu_pgxp_enable)
+    ImGui::EndDisabled();
   HelpIcon(
     "Experimental option! Use PGXP to track vertex positions.\n"
     "Try this if 3D screenshots don't work for your game, but\n"
@@ -1127,17 +1118,26 @@ void DrawGuiWindow()
     "\n"
     "> Settings > Enhancements > PGXP > CPU Mode (Very Slow)"
   );
-  ImGui::SameLine();
-  ImGui::Text("(currently %s)", g_settings.gpu_pgxp_enable ? "ON" : "OFF");
 
-  if (!g_settings.gpu_pgxp_enable)
-    ImGui::EndDisabled();
+  ImGui::Checkbox("2D Mode", &s_ui_config.in_2d_mode);
+  HelpIcon(
+    "Dumps 2D polys instead of the reconstructed 3D scene.\n"
+    "Gives an exploded view, where drawing order is converted\n"
+    "to Z depth.\n"
+    "\n"
+    "Good for pre-rendered backgrounds, 2D games... or for fun.\n"
+    "\n"
+    "Expect UV issues on 2D elements drawn in 3D space,\n"
+    "especially along the bottom-right edges.\n"
+  );
 
+  /*
   ImGui::Checkbox("Dry Run", &s_ui_config.is_dry_run);
   HelpIcon(
     "Debug use. Runs without taking shots. Can be used\n"
     "to test performance of the jitter implementation."
   );
+  */
 
   if (s_running)
     ImGui::EndDisabled();
