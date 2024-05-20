@@ -1,7 +1,9 @@
 #include "screenshot_3d.h"
+#include "gpu.h"
 #include "host.h"
 #include "system.h"
 
+#include "common/byte_stream.h"
 #include "common/file_system.h"
 #include "common/hash_combine.h"
 #include "common/image.h"
@@ -30,6 +32,7 @@ struct Config
 {
   int num_frames_to_capture = 1;
   bool disable_culling = true;
+  bool shoot_front_and_back = false;
   bool dump_full_textures = true;
   bool in_2d_mode = false;
   bool use_pgxp = false;
@@ -159,6 +162,7 @@ static constexpr u32 WARMUP_PERIOD = 2;
 static constexpr u32 VERTEX_RECYCLE_PERIOD = 2;
 
 static Config s_config;
+
 static bool s_running = false;
 static int s_shots_taken = 0;
 static u32 s_frame_counter = 0;
@@ -168,9 +172,21 @@ using TextureKey = u64;
 using TextureIndex = u32;
 
 static std::vector<Poly> s_poly_buffer;
-static std::unordered_map<ScreenXYKey, Vertex> s_vertex_cache;
 static std::vector<Texture> s_textures;
+static std::unordered_map<ScreenXYKey, Vertex> s_vertex_cache;
 static std::unordered_map<TextureKey, TextureIndex> s_texture_cache;
+
+// A shot taken during the front phase of the "Fix broken culling"
+// feature. It is kept in memory until the back phase when we finish
+// it and write it out.
+struct FrontShot
+{
+  std::vector<Poly> poly_buffer;
+  std::vector<Texture> textures;
+};
+static std::vector<FrontShot> s_front_shots;
+static bool s_in_front_phase = false;
+static System::MemorySaveState s_rewind_save_state;
 
 // UI doesn't directly control the state. It schedules updates for the
 // next frame end (double buffered) with these variables.
@@ -185,16 +201,28 @@ static void TurnOff()
   s_running = false;
   s_shots_taken = 0;
   s_frame_counter = 0;
+
   s_vertex_cache.clear();
   s_poly_buffer.clear();
   s_textures.clear();
   s_texture_cache.clear();
+
+  s_front_shots.clear();
+  s_in_front_phase = false;
+  s_rewind_save_state.vram_texture.reset();
+  s_rewind_save_state.state_stream.reset();
 }
 
 static void TurnOn()
 {
   TurnOff();
   s_running = true;
+
+  if (s_config.shoot_front_and_back)
+  {
+    s_in_front_phase = true;
+    System::SaveMemoryState(&s_rewind_save_state);
+  }
 }
 
 void Shutdown()
@@ -212,12 +240,38 @@ static bool IsDoneShooting()
   return s_shots_taken >= s_config.num_frames_to_capture;
 }
 
+// Rewind to the beginning and reshoot everything, but with reversed
+// NCLIP this time.
+static void EnterBackPhase()
+{
+  s_shots_taken = 0;
+  s_frame_counter = 0;
+  s_vertex_cache.clear();
+  s_poly_buffer.clear();
+  s_textures.clear();
+  s_texture_cache.clear();
+
+  s_in_front_phase = false;
+
+  System::LoadMemoryState(s_rewind_save_state);
+}
+
+bool BlockingInput()
+{
+  return s_running && s_config.shoot_front_and_back;
+}
+
 ////////////////////////////////////
 // Misc GTE hooks
 ////////////////////////////////////
 bool ShouldDisableCulling()
 {
   return s_running && s_config.disable_culling;
+}
+
+bool ShouldReverseNCLIP()
+{
+  return s_running && s_config.shoot_front_and_back && !s_in_front_phase;
 }
 
 bool ShouldUsePGXP()
@@ -931,6 +985,18 @@ static void TakeShot()
   if (s_poly_buffer.empty())
     return;
 
+  // During the front phase, just record the data.
+  if (s_config.shoot_front_and_back && s_in_front_phase)
+  {
+    s_front_shots.resize(s_frame_counter + 1);
+    s_front_shots[s_frame_counter].poly_buffer = s_poly_buffer;
+    s_front_shots[s_frame_counter].textures = s_textures;
+
+    s_shots_taken++;
+
+    return;
+  }
+
   const std::string dump_directory = GetDumpDirectory();
 
   if (dump_directory.empty())
@@ -971,9 +1037,6 @@ static void RecycleVertsAtFrameEnd()
 
 static void FinishFrame()
 {
-  if (!s_running)
-    return;
-
   fmt::print(
     "Got {} vertices, {} polys, {} textures.\n",
     s_vertex_cache.size(),
@@ -988,7 +1051,10 @@ static void FinishFrame()
 
     if (IsDoneShooting())
     {
-      TurnOff();
+      if (s_config.shoot_front_and_back && s_in_front_phase)
+        EnterBackPhase();
+      else
+        TurnOff();
       return;
     }
   }
@@ -1001,9 +1067,28 @@ static void FinishFrame()
   s_frame_counter++;
 }
 
+static void StartFrame()
+{
+  if (s_config.shoot_front_and_back && !s_in_front_phase)
+  {
+    if (s_frame_counter < s_front_shots.size())
+    {
+      // Initialize with the "front-facing" data from the front phase on
+      // the same frame. We will now get the "back-facing" data and
+      // write it all out to the OBJ.
+      s_poly_buffer = s_front_shots[s_frame_counter].poly_buffer;
+      s_textures = s_front_shots[s_frame_counter].textures;
+    }
+  }
+}
+
 void NextFrame()
 {
-  FinishFrame();
+  if (s_running)
+  {
+    FinishFrame();
+    StartFrame();
+  }
 
   // Process UI actions
   if (s_run_requested && !s_running)
@@ -1083,6 +1168,22 @@ void DrawGuiWindow()
     "Disables culling of tris which are back-facing or zero-size in\n"
     "screen space. Required or your screenshot will be missing all\n"
     "tris that weren't facing the camera."
+  );
+
+  ImGui::SameLine();
+  ImGui::Text("        ");
+  ImGui::SameLine();
+
+  ImGui::Checkbox("Fix Broken Culling", &s_ui_config.shoot_front_and_back);
+  HelpIcon(
+    "May fix cases when Disable Culling causes random polys to be\n"
+    "missing, eg. Ape Escape.\n"
+    "\n"
+    "Works by capturing once with regular culling, rewinding via save\n"
+    "state, and capturing again with reversed culling. \n"
+    "\n"
+    "To prevent you from moving during the two \"exposures\", input is\n"
+    "disabled (or it's supposed to be...)."
   );
 
   ImGui::Checkbox("Dump Full 256x256 Textures", &s_ui_config.dump_full_textures);

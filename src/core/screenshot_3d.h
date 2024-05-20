@@ -8,8 +8,9 @@ namespace Screenshot3D {
 void NextFrame();
 void Shutdown();
 
-// Use to make GTE.NCLIP always be positive
+// Use to modify GTE.NCLIP behavior
 bool ShouldDisableCulling();
+bool ShouldReverseNCLIP();
 
 // Called in GTE.RTPS to track 3D verts
 void PushVertex(float x, float y, float z, s32& Sx, s32& Sy);
@@ -45,6 +46,11 @@ void DrawRectangle(
 // mid-frame VRAM changes via dirty rects, etc. is not implemented.
 bool WantsUpdateFromVRAM();
 void UpdateFromVRAM(const u16* vram_ptr);
+
+// Intended to block outside input eg. controllers. Used when getting
+// multiple "exposures" by re-running from a state state to make the
+// runs repeatable.
+bool BlockingInput();
 
 void DrawGuiWindow();
 

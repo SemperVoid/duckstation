@@ -10,6 +10,7 @@
 #include "common/timer.h"
 #include "core/controller.h"
 #include "core/host.h"
+#include "core/screenshot_3d.h"
 #include "core/system.h"
 #include "imgui_manager.h"
 #include "input_source.h"
@@ -833,7 +834,7 @@ void InputManager::AddPadBindings(SettingsInterface& si, const std::string& sect
                           return;
 
                         Controller* c = System::GetController(pad_index);
-                        if (c)
+                        if (c && !Screenshot3D::BlockingInput())
                           c->SetBindState(bind_index, value);
                       }});
         }

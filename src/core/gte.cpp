@@ -870,6 +870,9 @@ void GTE::Execute_NCLIP(Instruction inst)
     if (value == 0) value = 1;      // fix zero-size
   }
 
+  if (Screenshot3D::ShouldReverseNCLIP())
+    value = -value;
+
   TruncateAndSetMAC<0>(value, 0);
 
   REGS.FLAG.UpdateError();
@@ -877,7 +880,7 @@ void GTE::Execute_NCLIP(Instruction inst)
 
 void GTE::Execute_NCLIP_PGXP(Instruction inst)
 {
-  if (Screenshot3D::ShouldDisableCulling())
+  if (Screenshot3D::ShouldDisableCulling() || Screenshot3D::ShouldReverseNCLIP())
   {
     Execute_NCLIP(inst);
   }
