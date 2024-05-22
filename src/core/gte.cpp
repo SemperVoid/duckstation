@@ -864,14 +864,8 @@ void GTE::Execute_NCLIP(Instruction inst)
                 s64(REGS.SXY2[0]) * s64(REGS.SXY0[1]) - s64(REGS.SXY0[0]) * s64(REGS.SXY2[1]) -
                 s64(REGS.SXY1[0]) * s64(REGS.SXY0[1]) - s64(REGS.SXY2[0]) * s64(REGS.SXY1[1]);
 
-  if (Screenshot3D::ShouldDisableCulling())
-  {
-    if (value < 0) value = -value;  // reverse backfacing
-    if (value == 0) value = 1;      // fix zero-size
-  }
-
-  if (Screenshot3D::ShouldReverseNCLIP())
-    value = -value;
+  if (Screenshot3D::WantsModifyNCLIP())
+    Screenshot3D::ModifyNCLIP(value);
 
   TruncateAndSetMAC<0>(value, 0);
 
@@ -880,7 +874,7 @@ void GTE::Execute_NCLIP(Instruction inst)
 
 void GTE::Execute_NCLIP_PGXP(Instruction inst)
 {
-  if (Screenshot3D::ShouldDisableCulling() || Screenshot3D::ShouldReverseNCLIP())
+  if (Screenshot3D::WantsModifyNCLIP())
   {
     Execute_NCLIP(inst);
   }

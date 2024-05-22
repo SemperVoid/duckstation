@@ -9,8 +9,8 @@ void NextFrame();
 void Shutdown();
 
 // Use to modify GTE.NCLIP behavior
-bool ShouldDisableCulling();
-bool ShouldReverseNCLIP();
+bool WantsModifyNCLIP();
+void ModifyNCLIP(s64& value);
 
 // Called in GTE.RTPS to track 3D verts
 void PushVertex(float x, float y, float z, s32& Sx, s32& Sy);

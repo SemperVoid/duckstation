@@ -176,7 +176,7 @@ static std::vector<Texture> s_textures;
 static std::unordered_map<ScreenXYKey, Vertex> s_vertex_cache;
 static std::unordered_map<TextureKey, TextureIndex> s_texture_cache;
 
-// A shot taken during the front phase of the "Fix broken culling"
+// A shot taken during the front phase of the "Capture Front & Back"
 // feature. It is kept in memory until the back phase when we finish
 // it and write it out.
 struct FrontShot
@@ -264,14 +264,20 @@ bool BlockingInput()
 ////////////////////////////////////
 // Misc GTE hooks
 ////////////////////////////////////
-bool ShouldDisableCulling()
+bool WantsModifyNCLIP()
 {
-  return s_running && s_config.disable_culling;
+  return s_running && (s_config.disable_culling || s_config.shoot_front_and_back);
 }
 
-bool ShouldReverseNCLIP()
+void ModifyNCLIP(s64& value)
 {
-  return s_running && s_config.shoot_front_and_back && !s_in_front_phase;
+  if (value == 0) value = 1;  // prevent culling zero-screen-space tris
+
+  if (s_config.disable_culling)
+    if (value < 0) value = -value;  // back-facing -> front-facing
+
+  if (s_config.shoot_front_and_back && !s_in_front_phase)
+    value = -value;                 // back-facing <-> front-facing
 }
 
 bool ShouldUsePGXP()
@@ -1165,25 +1171,26 @@ void DrawGuiWindow()
 
   ImGui::Checkbox("Disable Culling", &s_ui_config.disable_culling);
   HelpIcon(
-    "Disables culling of tris which are back-facing or zero-size in\n"
-    "screen space. Required or your screenshot will be missing all\n"
-    "tris that weren't facing the camera."
+    "Disables culling of back-facing or zero-size tris by tricking\n"
+    "the game into into thinking all tris are front-facing.\n"
+    "\n"
+    "Works in most games."
   );
 
   ImGui::SameLine();
   ImGui::Text("        ");
   ImGui::SameLine();
 
-  ImGui::Checkbox("Fix Broken Culling", &s_ui_config.shoot_front_and_back);
+  ImGui::Checkbox("Capture Front & Back", &s_ui_config.shoot_front_and_back);
   HelpIcon(
-    "May fix cases when Disable Culling causes random polys to be\n"
-    "missing, eg. Ape Escape.\n"
+    "Captures both front- and back-facing polys. May work when \"Disable\n"
+    "Culling\" doesn't. Fixes eg. Ape Escape.\n"
     "\n"
     "Works by capturing once with regular culling, rewinding via save\n"
-    "state, and capturing again with reversed culling. \n"
+    "state, and capturing again with reversed culling.\n"
     "\n"
     "To prevent you from moving during the two \"exposures\", input is\n"
-    "disabled (or it's supposed to be...)."
+    "disabled while capturing (or is supposed to be...)."
   );
 
   ImGui::Checkbox("Dump Full 256x256 Textures", &s_ui_config.dump_full_textures);
