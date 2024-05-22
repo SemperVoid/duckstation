@@ -24,28 +24,31 @@ struct Config
 
 static Config s_config;
 
-static void Rotate2D(s32 angle, s64& x, s64& y)
+// Cached sine/cosine values
+// Precomputed once at frame start
+s64 s_sin_angle_x, s_cos_angle_x;
+s64 s_sin_angle_y, s_cos_angle_y;
+s64 s_sin_angle_z, s_cos_angle_z;
+
+static void PrecomputeSineAndCosine(s32 angle, s64& sine, s64& cosine)
 {
   constexpr float PI = 3.14159265f;
   const float radians = angle * (2.f * PI / 360.f);
-  const s64 s = roundf(sinf(radians) * 4096.f);
-  const s64 c = roundf(cosf(radians) * 4096.f);
+  sine = roundf(sinf(radians) * 4096.f);
+  cosine = roundf(cosf(radians) * 4096.f);
+}
 
-  const s64 new_x = ( c * x + s * y) >> 12;
-  const s64 new_y = (-s * x + c * y) >> 12;
-
-  x = new_x;
-  y = new_y;
+static void Rotate2D(s64 sine, s64 cosine, s64& x, s64& y)
+{
+  const s64 x_ = x, y_ = y;
+  x = (cosine * x_ + sine * y_) >> 12;
+  y = (-sine * x_ + cosine * y_) >> 12;
 }
 
 // x,y,z are in high precision, before the 12 fractional bits are
 // shifted off.
 void ApplyToVertex(s64& x, s64& y, s64& z)
 {
-  // Disable when the GUI hidden to avoid confusion
-  if (!g_settings.debugging.show_freecam)
-    return;
-
   if (!s_config.enabled)
     return;
 
@@ -53,18 +56,26 @@ void ApplyToVertex(s64& x, s64& y, s64& z)
   y -= (s64)s_config.move_y << 12;
   z -= (s64)s_config.move_z << 12;
 
-  Rotate2D(s_config.angle_x, y, z);
-  Rotate2D(s_config.angle_y, x, z);
-  Rotate2D(s_config.angle_z, x, y);
+  Rotate2D(s_sin_angle_x, s_cos_angle_x, y, z);
+  Rotate2D(s_sin_angle_y, s_cos_angle_y, x, z);
+  Rotate2D(s_sin_angle_z, s_cos_angle_z, x, y);
 }
 
-// Config is double-buffered to prevent "tearing" (not sure this is
-// necessary). This is the back-buffer that the GUI modifies.
+// Config is double-buffered so changes don't "tear" the frame.
+// This is the back-buffer the UI modifies.
 static Config s_ui_config;
 
 void NextFrame()
 {
   s_config = s_ui_config;
+
+  PrecomputeSineAndCosine(s_config.angle_x, s_sin_angle_x, s_cos_angle_x);
+  PrecomputeSineAndCosine(s_config.angle_y, s_sin_angle_y, s_cos_angle_y);
+  PrecomputeSineAndCosine(s_config.angle_z, s_sin_angle_z, s_cos_angle_z);
+
+  // Disable when GUI hidden to avoid confusion
+  if (!g_settings.debugging.show_freecam)
+    s_config.enabled = false;
 }
 
 void DrawGuiWindow()
