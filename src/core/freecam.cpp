@@ -86,6 +86,10 @@ void DrawGuiWindow()
     ImVec2(500.0f * framebuffer_scale, 233.0f * framebuffer_scale),
     ImGuiCond_Once
   );
+  ImGui::SetNextWindowPos(
+    ImVec2(480.0f * framebuffer_scale, 60.0f * framebuffer_scale),
+    ImGuiCond_Once
+  );
 
   if (!ImGui::Begin("Freecam", nullptr))
   {
