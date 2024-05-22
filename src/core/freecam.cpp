@@ -11,7 +11,7 @@ namespace {
 
 struct Config
 {
-  bool enabled = false;
+  bool enabled = true;
   s32 angle_x = 0;
   s32 angle_y = 0;
   s32 angle_z = 0;
