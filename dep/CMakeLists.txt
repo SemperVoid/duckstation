@@ -33,6 +33,8 @@ add_subdirectory(reshadefx EXCLUDE_FROM_ALL)
 disable_compiler_warnings_for_target(reshadefx)
 add_subdirectory(rcheevos EXCLUDE_FROM_ALL)
 disable_compiler_warnings_for_target(rcheevos)
+add_subdirectory(fpng EXCLUDE_FROM_ALL)
+disable_compiler_warnings_for_target(fpng)
 
 if(ENABLE_CUBEB)
   add_subdirectory(cubeb EXCLUDE_FROM_ALL)

@@ -13,6 +13,7 @@
 
 #include "fmt/format.h"
 #include "fmt/chrono.h"
+#include "fpng.h"
 #include "imgui.h"
 #include "xxhash.h"
 #if defined(CPU_ARCH_X86) || defined(CPU_ARCH_X64)
@@ -688,8 +689,37 @@ static void HashTextureAndAssignFileName(Texture& texture)
   );
 }
 
+static bool SavePNG(
+  const std::string& png_path,
+  const Common::RGBA8Image& image,
+  std::vector<u8>& scratch_space
+)
+{
+  scratch_space.clear();
+
+  // fpng is significantly faster than image.SaveToFile
+  // which calls stb_image
+  bool res =
+    fpng::fpng_encode_image_to_memory(
+      image.GetPixels(),
+      image.GetWidth(),
+      image.GetHeight(),
+      4,                        // RGBA, 4 channels
+      scratch_space,
+      fpng::FPNG_ENCODE_SLOWER  // 2-pass encoder for better filesize
+    );
+  if (!res)
+    return false;
+
+  return FileSystem::WriteBinaryFile(png_path.c_str(), scratch_space.data(), scratch_space.size());
+}
+
 static void DumpTextures(const std::string& dump_directory)
 {
+  const auto begin_t = std::chrono::steady_clock::now();
+
+  std::vector<u8> scratch_space;
+
   for (auto& texture : s_textures)
   {
     HashTextureAndAssignFileName(texture);
@@ -702,9 +732,16 @@ static void DumpTextures(const std::string& dump_directory)
     if (FileSystem::FileExists(path.c_str()))
       continue;
 
-    if (!texture.image.SaveToFile(path.c_str()))
+    //if (!texture.image.SaveToFile(path.c_str()))
+    if (!SavePNG(path, texture.image, scratch_space))
       Host::AddFormattedOSDMessage(10.0f, "Couldn't save texture to '%s'", path.c_str());
   }
+
+  const auto end_t = std::chrono::steady_clock::now();
+  fmt::print(
+    "Dumping textures took {:.2f} seconds.\n",
+    std::chrono::duration_cast<std::chrono::milliseconds>(end_t - begin_t).count() / 1000.0
+  );
 }
 
 ////////////////////////////////////

@@ -196,6 +196,9 @@
     <ProjectReference Include="..\..\dep\stb\stb.vcxproj">
       <Project>{ed601289-ac1a-46b8-a8ed-17db9eb73423}</Project>
     </ProjectReference>
+    <ProjectReference Include="..\..\dep\fpng\fpng.vcxproj">
+      <Project>{3dfc351e-96cb-4b5a-8bb1-35e78029c113}</Project>
+    </ProjectReference>
     <ProjectReference Include="..\..\dep\vixl\vixl.vcxproj" Condition="'$(Platform)'=='ARM64'">
       <Project>{8906836e-f06e-46e8-b11a-74e5e8c7b8fb}</Project>
     </ProjectReference>
