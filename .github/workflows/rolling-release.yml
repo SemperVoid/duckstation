@@ -83,16 +83,16 @@ jobs:
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         msbuild duckstation.sln -t:Build -p:Platform=x64;Configuration=ReleaseLTCG
 
-    - name: Create x64 symbols archive
-      shell: cmd
-      run: |
-        "C:\Program Files\7-Zip\7z.exe" a -r duckstation-windows-x64-release-symbols.zip ./bin/x64/*.pdb
+    # - name: Create x64 symbols archive
+    #   shell: cmd
+    #   run: |
+    #     "C:\Program Files\7-Zip\7z.exe" a -r duckstation-windows-x64-release-symbols.zip ./bin/x64/*.pdb
 
-    - name: Upload x64 release symbols artifact
-      uses: actions/upload-artifact@v1
-      with:
-        name: "windows"
-        path: "duckstation-windows-x64-release-symbols.zip"
+    # - name: Upload x64 release symbols artifact
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: "windows"
+    #     path: "duckstation-windows-x64-release-symbols.zip"
 
     - name: Remove extra bloat before archiving
       shell: cmd
@@ -106,7 +106,7 @@ jobs:
         "C:\Program Files\7-Zip\7z.exe" a -r duckstation-windows-x64-release.zip ./bin/x64/*
 
     - name: Upload x64 release artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "windows"
         path: "duckstation-windows-x64-release.zip"
@@ -182,7 +182,7 @@ jobs:
         "C:\Program Files\7-Zip\7z.exe" a -r duckstation-windows-arm64-release-symbols.zip ./bin/ARM64/*.pdb
 
     - name: Upload arm64 release symbols artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "windows-arm64"
         path: "duckstation-windows-arm64-release-symbols.zip"
@@ -199,7 +199,7 @@ jobs:
         "C:\Program Files\7-Zip\7z.exe" a -r duckstation-windows-arm64-release.zip ./bin/ARM64/*
 
     - name: Upload arm64 release artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "windows-arm64"
         path: "duckstation-windows-arm64-release.zip"
@@ -275,7 +275,7 @@ jobs:
         scripts/appimage/make-appimage.sh $(realpath .) $(realpath ./build) $HOME/deps DuckStation-x64
 
     - name: Upload Qt AppImage
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "linux-x64-appimage-qt"
         path: "DuckStation-x64.AppImage"
@@ -320,14 +320,14 @@ jobs:
 #        ostree commit --repo=repo --canonical-permissions --branch=screenshots/x86_64 flatpak_app/screenshots
 
     - name: Upload Flatpak
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "linux-flatpak"
         path: "duckstation-x64.flatpak"
 
 
   macos-build:
-    runs-on: macos-11
+    runs-on: macos-13
     timeout-minutes: 120
     steps:
     - uses: actions/checkout@v2.3.1
@@ -384,7 +384,7 @@ jobs:
         zip -r duckstation-mac-release.zip DuckStation.app/
 
     - name: Upload macOS .app
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: "macos"
         path: "build/duckstation-mac-release.zip"
@@ -397,27 +397,27 @@ jobs:
     if: github.ref == 'refs/heads/feature/3d-screenshot'
     steps:
       - name: Download Windows Artifacts
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4
         with:
           name: "windows"
 
       # - name: Download Windows ARM64 Artifact
-      #   uses: actions/download-artifact@v1
+      #   uses: actions/download-artifact@v4
       #   with:
       #     name: "windows-arm64"
 
       - name: Download Qt AppImage Artifact
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4
         with:
           name: "linux-x64-appimage-qt"
 
       # - name: Download Flatpak Artifact
-      #   uses: actions/download-artifact@v1
+      #   uses: actions/download-artifact@v4
       #   with:
       #     name: "linux-flatpak"
 
       - name: Download MacOS Artifact
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4
         with:
           name: "macos"
 
@@ -455,12 +455,17 @@ jobs:
             linux-flatpak/duckstation-x64.flatpak
             macos/duckstation-mac-release.zip
 
+      - name: Show file structure (debug)
+        run: |
+          pwd
+          ls -R
+
       - name: Move artifacts
         run: |
           mkdir artifacts
-          mv windows/duckstation-windows-x64-release.zip artifacts/duckstation-3D-screenshot-windows-x64-release.zip
-          mv linux-x64-appimage-qt/DuckStation-x64.AppImage artifacts/DuckStation-3D-screenshot-x64.AppImage
-          mv macos/duckstation-mac-release.zip artifacts/duckstation-3D-screenshot-mac-release.zip
+          mv duckstation-windows-x64-release.zip artifacts/duckstation-3D-screenshot-windows-x64-release.zip
+          mv DuckStation-x64.AppImage artifacts/DuckStation-3D-screenshot-x64.AppImage
+          mv duckstation-mac-release.zip artifacts/duckstation-3D-screenshot-mac-release.zip
 
       - uses: actions/checkout@v3
         with:
@@ -472,12 +477,6 @@ jobs:
         run: |
           git tag --force latest-3d-screenshot ${{ github.sha }}
           git push --force origin latest-3d-screenshot
-
-      - name: Dump paths (debug)
-        run: |
-          pwd
-          ls
-          ls artifacts
 
       - name: Release
         uses: ncipollo/release-action@v1
