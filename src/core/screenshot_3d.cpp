@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,12 +30,18 @@
 namespace Screenshot3D {
 namespace {
 
+enum {
+  TEXTURE_MODE_FULL = 0,
+  TEXTURE_MODE_CROPPED = 1,
+  TEXTURE_MODE_PACKED = 2
+};
+
 struct Config
 {
   int num_frames_to_capture = 1;
+  int texture_mode = TEXTURE_MODE_FULL;
   bool disable_culling = true;
   bool shoot_front_and_back = false;
-  bool dump_full_textures = true;
   bool in_2d_mode = false;
   bool use_pgxp = false;
   bool is_dry_run = false;
@@ -128,14 +135,32 @@ struct UVBlob
       max_v = std::max(max_v, poly.v[i].v);
     }
   }
+
+  bool Collides(const UVBlob& other) const
+  {
+    return !(
+      (other.min_u > max_u || other.max_u < min_u) ||
+      (other.min_v > max_v || other.max_v < min_v)
+    );
+  }
+};
+
+struct TextureImage
+{
+  Common::RGBA8Image pixbuf;
+  std::string filename;
+  bool semitransparency;  // uses Alpha=50% for texels with the semitransparent bit?
+  bool is_written = false;
+
+  void HashAndAssignFileName();
 };
 
 struct Texture
 {
   TextureState tstate;
   UVBlob blob;
-  Common::RGBA8Image image;
-  std::string filename;
+  // Shared because multiple textures can be packed into one image
+  std::shared_ptr<TextureImage> image;
 };
 
 } // namespace
@@ -557,26 +582,36 @@ void DrawRectangle(
 ////////////////////////////////////
 bool WantsUpdateFromVRAM()
 {
-  return s_running && !s_config.is_dry_run && IsWarmedUp();
+  if (!s_running || s_config.is_dry_run || !IsWarmedUp())
+    return false;
+
+  if (s_config.shoot_front_and_back && s_in_front_phase)
+    return false;
+
+  return true;
 }
 
-static void FillTextureFromVRAM(Texture& texture, const u16* vram_ptr)
+static void FillTextureFromVRAM(
+  Texture& texture,
+  const u16* vram_ptr,
+  u32 dst_x, u32 dst_y
+)
 {
 #define GetPixel(x, y) (vram_ptr[VRAM_WIDTH * (y) + (x)])
-  const auto& draw_mode = texture.tstate;
+  const auto draw_mode = texture.tstate;
   const auto palette = texture.tstate.GetPaletteReg();
   const auto texture_mode = texture.tstate.GetTextureMode();
   const auto& window = texture.tstate.window;
-  auto& image = texture.image;
+  auto& pixbuf = texture.image->pixbuf;
 
-  image.SetSize(texture.blob.Width(), texture.blob.Height());
-
-  for (u32 image_y = 0; image_y < image.GetHeight(); ++image_y)
+  for (u32 ofs_y = 0; ofs_y < texture.blob.Height(); ++ofs_y)
   {
-    for (u32 image_x = 0; image_x < image.GetWidth(); ++image_x)
+    for (u32 ofs_x = 0; ofs_x < texture.blob.Width(); ++ofs_x)
     {
-      u8 texcoord_x = texture.blob.min_u + image_x;
-      u8 texcoord_y = texture.blob.min_v + image_y;
+      u32 image_x = dst_x + ofs_x;
+      u32 image_y = dst_y + ofs_y;
+      u8 texcoord_x = texture.blob.min_u + ofs_x;
+      u8 texcoord_y = texture.blob.min_v + ofs_y;
 
       // Apply texture window
       texcoord_x = (texcoord_x & window.and_x) | window.or_x;
@@ -618,7 +653,7 @@ static void FillTextureFromVRAM(Texture& texture, const u16* vram_ptr)
       // => Alpha = 0%
       if (texture_color == 0)
       {
-        image.SetPixel(image_x, image_y, 0);  // transparent black
+        pixbuf.SetPixel(image_x, image_y, 0);  // transparent black
         continue;
       }
 
@@ -638,29 +673,119 @@ static void FillTextureFromVRAM(Texture& texture, const u16* vram_ptr)
         alpha = 255;
 
       const u32 rgb = VRAMRGBA5551ToRGBA8888(texture_color) & 0x00FFFFFFu;
-      image.SetPixel(image_x, image_y, rgb | (alpha << 24));
+      pixbuf.SetPixel(image_x, image_y, rgb | (alpha << 24));
     }
   }
 #undef GetPixel
 }
 
-void UpdateFromVRAM(const u16* vram_ptr)
+static bool AnyCollidesWith(const std::vector<Texture*>& list, const Texture& t)
 {
-  for (auto& texture : s_textures)
+  for (const Texture* tp : list)
   {
-    if (texture.image.IsValid())
-      continue;
+    if (tp->blob.Collides(t.blob))
+      return true;
+  }
+  return false;
+}
 
-    if (s_config.dump_full_textures)
+// Pack a group of textures in the same 256x256 space into images.
+static void PackTexturesIntoImages(const std::vector<Texture*>& textures, const u16* vram_ptr)
+{
+  // Lists of Textures that go into one image. The second image
+  // is a "spill over" if a texture would collide with a previous
+  // texture in the first image, the third is a "spill over" for
+  // the second, etc.
+  // Note that this means the order the textures come in matters.
+  std::vector<std::vector<Texture*>> lists;
+
+  for (Texture* texture_ptr : textures)
+  {
+    bool found = false;
+    for (auto& list : lists)
     {
-      // Expand to maximum UV range
-      texture.blob.min_u = 0;
-      texture.blob.min_v = 0;
-      texture.blob.max_u = 255;
-      texture.blob.max_v = 255;
+      if (!AnyCollidesWith(list, *texture_ptr))
+      {
+        list.push_back(texture_ptr);
+        found = true;
+        break;
+      }
     }
 
-    FillTextureFromVRAM(texture, vram_ptr);
+    if (!found)
+      lists.push_back({texture_ptr});
+  }
+
+  for (const auto& list : lists)
+  {
+    auto image = std::make_shared<TextureImage>();
+    image->pixbuf.SetSize(256, 256);
+    image->semitransparency = list[0]->tstate.transparency_enable;
+
+    for (Texture* texture_ptr : list)
+    {
+      texture_ptr->image = image;
+
+      FillTextureFromVRAM(*texture_ptr, vram_ptr, texture_ptr->blob.min_u, texture_ptr->blob.min_v);
+
+      // Expand to full 256x256 space now, or the OBJ writer will
+      // think the image image has been cropped down to UVBlob
+      // size and adjust the UVs accordingly.
+      texture_ptr->blob.min_u = 0;
+      texture_ptr->blob.min_v = 0;
+      texture_ptr->blob.max_u = 255;
+      texture_ptr->blob.max_v = 255;
+    }
+  }
+}
+
+void UpdateFromVRAM(const u16* vram_ptr)
+{
+  if (s_config.texture_mode == TEXTURE_MODE_PACKED)
+  {
+    std::unordered_map<u64, std::vector<Texture*>> groups;
+
+    // Group textures that differ only in their palette/window
+    for (auto& texture : s_textures)
+    {
+      if (texture.image)
+        continue;
+
+      auto tstate = texture.tstate;
+      tstate.palette = 0;
+      tstate.window.and_x = 0;
+      tstate.window.and_y = 0;
+      tstate.window.or_x = 0;
+      tstate.window.or_y = 0;
+      groups[tstate.PackIntoU64()].push_back(&texture);
+    }
+
+    // Pack textures in each group into images
+    for (const auto& kv : groups)
+      PackTexturesIntoImages(kv.second, vram_ptr);
+  }
+  else
+  {
+    for (auto& texture : s_textures)
+    {
+      if (texture.image)
+        continue;
+
+      if (s_config.texture_mode == TEXTURE_MODE_FULL)
+      {
+        // Expand to maximum UV range
+        texture.blob.min_u = 0;
+        texture.blob.min_v = 0;
+        texture.blob.max_u = 255;
+        texture.blob.max_v = 255;
+      }
+
+      // One image per texture
+      texture.image = std::make_shared<TextureImage>();
+      texture.image->pixbuf.SetSize(texture.blob.Width(), texture.blob.Height());
+      texture.image->semitransparency = texture.tstate.transparency_enable;
+      FillTextureFromVRAM(texture, vram_ptr, 0, 0);
+    }
   }
 
   // All existing textures now closed for editing
@@ -668,30 +793,30 @@ void UpdateFromVRAM(const u16* vram_ptr)
   s_texture_cache.clear();
 }
 
-static void HashTextureAndAssignFileName(Texture& texture)
+void TextureImage::HashAndAssignFileName()
 {
-  if (!texture.filename.empty())
+  if (!filename.empty())
     return;
 
-  if (!texture.image.IsValid())
+  if (!pixbuf.IsValid())
     return;
 
-  const u32 width = texture.image.GetWidth();
-  const u32 height = texture.image.GetHeight();
+  const u32 width = pixbuf.GetWidth();
+  const u32 height = pixbuf.GetHeight();
   const size_t size = width * height * sizeof(u32);
-  XXH128_hash_t hash = XXH3_128bits(texture.image.GetPixels(), size);
+  XXH128_hash_t hash = XXH3_128bits(pixbuf.GetPixels(), size);
 
-  texture.filename = fmt::format(
+  filename = fmt::format(
     "{:016X}{:016X}{}",
     hash.high64,
     hash.low64 ^ width,  // add dependence on dimensions
-    texture.tstate.transparency_enable ? "t" : ""
+    semitransparency ? "t" : ""
   );
 }
 
 static bool SavePNG(
   const std::string& png_path,
-  const Common::RGBA8Image& image,
+  const Common::RGBA8Image& pixbuf,
   std::vector<u8>& scratch_space
 )
 {
@@ -701,9 +826,9 @@ static bool SavePNG(
   // which calls stb_image
   bool res =
     fpng::fpng_encode_image_to_memory(
-      image.GetPixels(),
-      image.GetWidth(),
-      image.GetHeight(),
+      pixbuf.GetPixels(),
+      pixbuf.GetWidth(),
+      pixbuf.GetHeight(),
       4,                        // RGBA, 4 channels
       scratch_space,
       fpng::FPNG_ENCODE_SLOWER  // 2-pass encoder for better filesize
@@ -722,19 +847,29 @@ static void DumpTextures(const std::string& dump_directory)
 
   for (auto& texture : s_textures)
   {
-    HashTextureAndAssignFileName(texture);
-
-    if (texture.filename.empty())
+    if (!texture.image)
       continue;
 
-    const std::string path = Path::Combine(dump_directory, fmt::format("{}.png", texture.filename));
+    if (texture.image->is_written)
+      continue;
+
+    texture.image->HashAndAssignFileName();
+
+    if (texture.image->filename.empty())
+      continue;
+
+    const std::string path = Path::Combine(
+      dump_directory,
+      fmt::format("{}.png", texture.image->filename)
+    );
 
     if (FileSystem::FileExists(path.c_str()))
       continue;
 
-    //if (!texture.image.SaveToFile(path.c_str()))
-    if (!SavePNG(path, texture.image, scratch_space))
+    if (!SavePNG(path, texture.image->pixbuf, scratch_space))
       Host::AddFormattedOSDMessage(10.0f, "Couldn't save texture to '%s'", path.c_str());
+
+    texture.image->is_written = true;
   }
 
   const auto end_t = std::chrono::steady_clock::now();
@@ -780,7 +915,7 @@ static void FormatMtlNameForPoly(std::string& mtl_name, const Poly& poly)
   }
 
   if (poly.texture_enable)
-    mtl_name += s_textures[poly.texture_index].filename;
+    mtl_name += s_textures[poly.texture_index].image->filename;
   else
     mtl_name += "Untextured";
 }
@@ -791,8 +926,8 @@ static void WriteNewmtlForPoly(FILE* fp, const Poly& poly, const std::string& mt
   if (poly.texture_enable)
   {
     const Texture& texture = s_textures[poly.texture_index];
-    fmt::print(fp, "map_Kd {}.png\n", texture.filename);
-    fmt::print(fp, "map_d -imfchan m {}.png\n", texture.filename);
+    fmt::print(fp, "map_Kd {}.png\n", texture.image->filename);
+    fmt::print(fp, "map_d -imfchan m {}.png\n", texture.image->filename);
   }
   else
   {
@@ -1121,6 +1256,13 @@ static void StartFrame()
       // write it all out to the OBJ.
       s_poly_buffer = s_front_shots[s_frame_counter].poly_buffer;
       s_textures = s_front_shots[s_frame_counter].textures;
+
+      // Re-init texture cache
+      for (u32 i = 0; i != s_textures.size(); i++)
+      {
+        const auto& texture = s_textures[i];
+        s_texture_cache[texture.tstate.PackIntoU64()] = i;
+      }
     }
   }
 }
@@ -1206,6 +1348,36 @@ void DrawGuiWindow()
 
   ImGui::SliderInt("Frames to Capture", &s_ui_config.num_frames_to_capture, 1, 20);
 
+  ImGui::Text("Texture Mode:");
+  ImGui::SameLine();
+  ImGui::RadioButton("Full", &s_ui_config.texture_mode, TEXTURE_MODE_FULL);
+  ImGui::SameLine();
+  ImGui::RadioButton("Cropped", &s_ui_config.texture_mode, TEXTURE_MODE_CROPPED);
+  ImGui::SameLine();
+  ImGui::RadioButton("Packed", &s_ui_config.texture_mode, TEXTURE_MODE_PACKED);
+  HelpIcon(
+    "Controls how textures are dumped to image files.\n"
+    "No visible effect on the model.\n"
+    "\n"
+    "FULL:\n"
+    "  Dumps the entire 256x256 texel space with the current palette.\n"
+    "  This is the only mode which lets you see the unused parts of\n"
+    "  textures, but it will also generally contain junk data in the\n"
+    "  wrong pixel format/palette that was packed nearby in VRAM.\n"
+    "  \n"
+    "  Also best for reusing textures between shots; the other\n"
+    "  modes are more sensitive to the exact scene contents.\n"
+    "\n"
+    "CROPPED:\n"
+    "  Like FULL, but crops each image down from 256x256 to just the\n"
+    "  region that is actually used. Removes junk data from the edges.\n"
+    "\n"
+    "PACKED:\n"
+    "  Packs multiple cropped textures with different palettes together\n"
+    "  into 256x256 texel space, located at the same place they would\n"
+    "  be with FULL. Resembles the way textures were packed in VRAM."
+  );
+
   ImGui::Checkbox("Disable Culling", &s_ui_config.disable_culling);
   HelpIcon(
     "Disables culling of back-facing or zero-size tris by tricking\n"
@@ -1228,19 +1400,6 @@ void DrawGuiWindow()
     "\n"
     "To prevent you from moving during the two \"exposures\", input is\n"
     "disabled while capturing (or is supposed to be...)."
-  );
-
-  ImGui::Checkbox("Dump Full 256x256 Textures", &s_ui_config.dump_full_textures);
-  HelpIcon(
-    "Dumps the entire 256x256 texture space instead of cropping\n"
-    "to just the part that is used.\n"
-    "\n"
-    "The cropped region may be of interest, or it may contain\n"
-    "garbage in the wrong color format or palette.\n"
-    "\n"
-    "This also avoids making tons of tiny image files during\n"
-    "UV scroll animations where the \"part that is used\" is\n"
-    "changing every frame."
   );
 
   if (!g_settings.gpu_pgxp_enable)
